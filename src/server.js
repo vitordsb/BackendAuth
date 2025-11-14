@@ -121,6 +121,45 @@ if (frontendBase) {
 }
 
 const allowAll = allowedOrigins.includes("*");
+const allowVercelWildcard =
+  String(process.env.ALLOW_VERCEL_ORIGINS || "true").toLowerCase() === "true";
+
+function extractHostname(origin) {
+  try {
+    const url = new URL(origin);
+    return url.hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function isVercelOrigin(origin) {
+  if (!origin || !allowVercelWildcard) {
+    return false;
+  }
+  const hostname = extractHostname(origin);
+  return Boolean(
+    hostname &&
+      (hostname === "vercel.app" || hostname.endsWith(".vercel.app"))
+  );
+}
+
+function isAllowedOrigin(origin) {
+  if (!origin) {
+    return true;
+  }
+  const normalized = normalizeOriginStr(origin);
+  if (allowAll) {
+    return true;
+  }
+  if (allowedOrigins.includes(normalized)) {
+    return true;
+  }
+  if (isVercelOrigin(normalized)) {
+    return true;
+  }
+  return false;
+}
 
 const corsOptions = {
   origin: allowAll
@@ -130,8 +169,7 @@ const corsOptions = {
     : function (origin, callback) {
         // Sem header Origin (curl, server-to-server) libera
         if (!origin) return callback(null, true);
-        const normalized = normalizeOriginStr(origin);
-        if (allowedOrigins.includes(normalized)) return callback(null, true);
+        if (isAllowedOrigin(origin)) return callback(null, true);
         return callback(new Error("Not allowed by CORS"), false);
       },
   credentials: true,
