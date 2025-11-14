@@ -6,8 +6,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "build": "npm run build",
-    "test": "npm run test"
+    "build": "echo \"No build step required for backendAuth\"",
+    "test": "echo \"No tests defined\""
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
