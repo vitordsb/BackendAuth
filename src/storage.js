@@ -37,6 +37,10 @@ async function getClient() {
 
     await usersCollection.createIndex({ email: 1 }, { unique: true });
     await usersCollection.createIndex({ id: 1 }, { unique: true });
+    await usersCollection.createIndex(
+      { resetTokenHash: 1 },
+      { sparse: true, expireAfterSeconds: 0 }
+    );
     await creditsHistoryCollection.createIndex({ userId: 1, createdAt: -1 });
     await creditsHistoryCollection.createIndex(
       { reference: 1 },
@@ -178,6 +182,48 @@ export async function getUserCredits(userId) {
     userId: user.id,
     credits: Number(user.credits ?? 0)
   };
+}
+
+export async function storePasswordResetToken(userId, tokenHash, expiresAt) {
+  const collection = await getUsersCollection();
+  const expiresDate = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+  await collection.updateOne(
+    { id: userId },
+    {
+      $set: {
+        resetTokenHash: tokenHash,
+        resetTokenExpiresAt: expiresDate
+      }
+    }
+  );
+}
+
+export async function findUserByResetToken(email, tokenHash) {
+  const collection = await getUsersCollection();
+  return collection.findOne({
+    email: email.toLowerCase(),
+    resetTokenHash: tokenHash,
+    resetTokenExpiresAt: { $gt: new Date() }
+  });
+}
+
+export async function updateUserPasswordHash(userId, passwordHash) {
+  const collection = await getUsersCollection();
+  const timestamp = new Date().toISOString();
+  await collection.updateOne(
+    { id: userId },
+    {
+      $set: {
+        passwordHash,
+        nexusApiKeyHash: passwordHash,
+        updatedAt: timestamp
+      },
+      $unset: {
+        resetTokenHash: "",
+        resetTokenExpiresAt: ""
+      }
+    }
+  );
 }
 
 export async function disconnectDatabase() {

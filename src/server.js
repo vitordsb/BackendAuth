@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import { v4 as uuid } from "uuid";
 import {
   adjustUserCredits,
@@ -10,8 +11,12 @@ import {
   findUserById,
   getUserCredits,
   getUsers,
-  insertUser
+  insertUser,
+  storePasswordResetToken,
+  findUserByResetToken,
+  updateUserPasswordHash
 } from "./storage.js";
+import { sendPasswordResetEmail } from "./mailer.js";
 
 dotenv.config();
 
@@ -19,6 +24,12 @@ const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 9000;
 const DEBUG = String(process.env.DEBUG || '').toLowerCase() === 'true';
 const INTERNAL_SERVICE_TOKEN = process.env.INTERNAL_SERVICE_TOKEN;
+const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || "http://localhost:5173";
+const RESET_PASSWORD_TOKEN_TTL_MINUTES = Number(
+  process.env.RESET_PASSWORD_TOKEN_TTL_MINUTES || 60
+);
+const RESET_PASSWORD_DEBUG_LINK =
+  String(process.env.RESET_PASSWORD_DEBUG_LINK || "").toLowerCase() === "true";
 
 // Log de diagnóstico (sem expor senha)
 if (DEBUG) {
@@ -151,6 +162,22 @@ function sanitizeUser(user) {
   };
 }
 
+function hashResetToken(token) {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
+function buildPasswordResetLink(email, token) {
+  try {
+    const url = new URL("/reset-password", FRONTEND_BASE_URL);
+    url.searchParams.set("token", token);
+    url.searchParams.set("email", email);
+    return url.toString();
+  } catch {
+    const base = FRONTEND_BASE_URL.replace(/\/$/, "");
+    return `${base}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
+  }
+}
+
 function requireServiceAuth(req, res, next) {
   if (!INTERNAL_SERVICE_TOKEN) {
     return res.status(503).json({ message: "INTERNAL_SERVICE_TOKEN não configurado" });
@@ -242,6 +269,84 @@ app.post("/auth/login", async (req, res) => {
       keySyncedWithPassword: true
     }
   });
+});
+
+app.post("/auth/forgot-password", async (req, res) => {
+  const { email } = req.body ?? {};
+  if (!email) {
+    return res.status(400).json({ message: "email é obrigatório" });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const genericResponse = {
+    message: "Se o email existir em nossa base, enviaremos instruções de redefinição."
+  };
+
+  try {
+    const user = await findUserByEmail(normalizedEmail);
+    if (!user) {
+      return res.json(genericResponse);
+    }
+
+    const token = crypto.randomBytes(32).toString("hex");
+    const tokenHash = hashResetToken(token);
+    const expiresAt = new Date(
+      Date.now() + Math.max(5, RESET_PASSWORD_TOKEN_TTL_MINUTES) * 60 * 1000
+    );
+
+    await storePasswordResetToken(user.id, tokenHash, expiresAt);
+
+    const resetUrl = buildPasswordResetLink(normalizedEmail, token);
+
+    try {
+      await sendPasswordResetEmail(user.email, resetUrl);
+    } catch (mailError) {
+      console.error("[mailer] Falha ao enviar email de redefinição:", mailError);
+    }
+
+    if (DEBUG || RESET_PASSWORD_DEBUG_LINK) {
+      return res.json({
+        ...genericResponse,
+        token,
+        resetUrl
+      });
+    }
+
+    return res.json(genericResponse);
+  } catch (err) {
+    console.error("[auth] forgot-password error:", err);
+    return res.status(500).json({ message: "Não foi possível processar a solicitação." });
+  }
+});
+
+app.post("/auth/reset-password", async (req, res) => {
+  const { email, token, password } = req.body ?? {};
+  if (!email || !token || !password) {
+    return res
+      .status(400)
+      .json({ message: "email, token e nova senha são obrigatórios" });
+  }
+
+  if (String(password).length < 6) {
+    return res.status(400).json({ message: "A nova senha deve ter 6 ou mais caracteres" });
+  }
+
+  try {
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const tokenHash = hashResetToken(String(token));
+    const user = await findUserByResetToken(normalizedEmail, tokenHash);
+    if (!user) {
+      return res.status(400).json({ message: "Token inválido ou expirado." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    await updateUserPasswordHash(user.id, passwordHash);
+
+    return res.json({ message: "Senha atualizada com sucesso." });
+  } catch (err) {
+    console.error("[auth] reset-password error:", err);
+    return res.status(500).json({ message: "Não foi possível atualizar a senha." });
+  }
 });
 
 app.get("/internal/users/:id/credits", requireServiceAuth, async (req, res) => {
