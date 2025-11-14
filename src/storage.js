@@ -159,7 +159,8 @@ export async function adjustUserCredits(userId, delta, options = {}) {
     createdAt: timestamp
   };
 
-  await history.insertOne(transaction);
+  const insertResult = await history.insertOne(transaction);
+  transaction._id = insertResult.insertedId;
 
   return {
     credits: newBalance,
@@ -182,6 +183,18 @@ export async function getUserCredits(userId) {
     userId: user.id,
     credits: Number(user.credits ?? 0)
   };
+}
+
+export async function listUserCreditsHistory(userId, { limit = 50 } = {}) {
+  const history = await getCreditsHistoryCollection();
+  const numericLimit = Number(limit);
+  const appliedLimit =
+    Number.isFinite(numericLimit) && numericLimit > 0 ? Math.min(200, numericLimit) : 50;
+  return history
+    .find({ userId }, { projection: { _id: 1, userId: 1, direction: 1, amount: 1, balanceAfter: 1, reference: 1, reason: 1, metadata: 1, createdAt: 1 } })
+    .sort({ createdAt: -1 })
+    .limit(appliedLimit)
+    .toArray();
 }
 
 export async function storePasswordResetToken(userId, tokenHash, expiresAt) {

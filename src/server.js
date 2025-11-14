@@ -10,6 +10,7 @@ import {
   findUserByEmail,
   findUserById,
   getUserCredits,
+  listUserCreditsHistory,
   getUsers,
   insertUser,
   storePasswordResetToken,
@@ -162,6 +163,21 @@ function sanitizeUser(user) {
   };
 }
 
+function sanitizeTransaction(entry) {
+  if (!entry) return null;
+  return {
+    id: String(entry._id || entry.id || `${entry.userId}-${entry.createdAt}`),
+    userId: entry.userId,
+    direction: entry.direction,
+    amount: Number(entry.amount ?? 0),
+    balanceAfter: Number(entry.balanceAfter ?? 0),
+    reference: entry.reference ?? null,
+    reason: entry.reason ?? null,
+    metadata: entry.metadata ?? null,
+    createdAt: entry.createdAt
+  };
+}
+
 function hashResetToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
@@ -200,6 +216,58 @@ app.get("/auth/users/:id", async (req, res) => {
     return res.status(404).json({ message: "Usuário não encontrado" });
   }
   return res.json({ user: sanitizeUser(user) });
+});
+
+app.get("/auth/users/:id/credits/history", async (req, res) => {
+  const user = await findUserById(req.params.id);
+  if (!user) {
+    return res.status(404).json({ message: "Usuário não encontrado" });
+  }
+  const limitParam = Number(req.query.limit);
+  const history = await listUserCreditsHistory(req.params.id, { limit: limitParam });
+  return res.json({
+    userId: req.params.id,
+    history: history.map(sanitizeTransaction)
+  });
+});
+
+app.post("/auth/users/:id/credits/simulate", async (req, res) => {
+  const { amount, note } = req.body ?? {};
+  const numericAmount = Number(amount);
+  if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+    return res
+      .status(400)
+      .json({ message: "Campo 'amount' deve ser um número positivo" });
+  }
+  try {
+    const result = await adjustUserCredits(req.params.id, numericAmount, {
+      reason: "simulation_topup",
+      metadata: {
+        simulated: true,
+        note: note ? String(note) : null
+      }
+    });
+    return res.json({
+      userId: req.params.id,
+      credits: result.credits,
+      transaction: sanitizeTransaction(result.transaction)
+    });
+  } catch (error) {
+    if (error.code === "USER_NOT_FOUND") {
+      return res.status(404).json({ message: "Usuário não encontrado" });
+    }
+    if (error.code === "INSUFFICIENT_FUNDS") {
+      return res.status(422).json({
+        message: "Saldo insuficiente para debitar créditos",
+        details: error.details
+      });
+    }
+    if (error.code === "INVALID_DELTA") {
+      return res.status(400).json({ message: "Operação de crédito inválida" });
+    }
+    console.error("Erro ao simular créditos:", error);
+    return res.status(500).json({ message: "Erro ao simular créditos para o usuário" });
+  }
 });
 
 app.post("/auth/register", async (req, res) => {
