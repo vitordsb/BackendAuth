@@ -84,9 +84,29 @@ function normalizeOriginStr(o) {
 
 const envOriginsRaw = parseEnvOrigins(process.env.CORS_ORIGINS);
 
-const allowedOrigins = (envOriginsRaw.length ? envOriginsRaw : defaultOrigins)
+function addOrigin(list, origin) {
+  if (!origin || origin === "*") {
+    return;
+  }
+  if (!list.includes(origin)) {
+    list.push(origin);
+  }
+}
+
+let allowedOrigins = (envOriginsRaw.length ? envOriginsRaw : defaultOrigins)
   .map(normalizeOriginStr)
   .filter(Boolean);
+
+const frontendBase = normalizeOriginStr(process.env.FRONTEND_BASE_URL);
+if (frontendBase) {
+  addOrigin(allowedOrigins, frontendBase);
+  if (frontendBase.startsWith("http://localhost:")) {
+    addOrigin(
+      allowedOrigins,
+      frontendBase.replace("http://localhost:", "http://127.0.0.1:")
+    );
+  }
+}
 
 const allowAll = allowedOrigins.includes("*");
 
